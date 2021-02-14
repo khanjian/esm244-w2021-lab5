@@ -1,0 +1,44 @@
+---
+title: "Lab 5"
+subtitle: "ESM 244"
+author: "Roupen Khanjian"
+date: "Winter 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tsibble)
+library(feasts)
+library(fable)
+library(here)
+```
+
+## Time series wrangling and forecasting
+
+#### Read in data and convert to tsibble
+
+```{r}
+energy <- read_csv(here("data", "energy.csv"))
+
+energy_ts <- energy %>% 
+  mutate(date = yearmonth(month)) %>% 
+  as_tsibble(key = NULL, index = date)
+```
+
+## EDA of ts
+
+#### Raw ts
+
+```{r}
+
+ggplot(data = energy_ts, aes(x = date, y = res_total)) +
+  geom_line(col = "dodgerblue") +
+  labs(y = "Residential energy consumption \n (Trillion BTU)")
+
+```
+
+#### 
+
+
