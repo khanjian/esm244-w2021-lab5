@@ -13,9 +13,15 @@ library(tsibble)
 library(feasts)
 library(fable)
 library(here)
+library(broom)
+library(urca)
+
+# Spatial data packages
+library(sf)
+library(tmap)
 ```
 
-## Time series wrangling and forecasting
+## Part 1: Time series wrangling and forecasting
 
 #### Read in data and convert to tsibble
 
@@ -39,6 +45,265 @@ ggplot(data = energy_ts, aes(x = date, y = res_total)) +
 
 ```
 
-#### 
+#### Seasonplot
+
+```{r}
+
+energy_ts %>% 
+  gg_season(y = res_total) +
+  theme_minimal() +
+  labs(x = "month",
+       y = "residential energy consumption (trillion BTU)")
+  
+
+
+```
+
+#### Subseries plot
+
+```{r}
+
+energy_ts %>% gg_subseries(res_total)
+
+```
+
+Our takeaway here is similar: there is clear seasonality (higher values in winter months), with an increasingly evident second peak in June/July/August. This reinforces our takeaways from the raw data and seasonplots.
+
+
+#### Decomposition (by STL)
+
+STL is an acronym for “Seasonal and Trend decomposition using Loess”, while Loess is a method for estimating nonlinear relationships
+
+```{r}
+
+# Find STL decompostion
+dcmp <- energy_ts %>% 
+  model(STL(res_total ~ season()))
+
+# View the components
+components(dcmp)
+
+# Visualize the decomposed components
+components(dcmp) %>% 
+  autoplot() +
+  theme_minimal()
+
+```
+
+#### Autocorrelation function (ACF)
+
+```{r}
+energy_ts %>% 
+  ACF(res_total) %>% 
+  autoplot()
+
+```
+
+## Forecasting by Holt-Winters exponential smoothing
+
+```{r}
+
+# Create the model:
+energy_fit <- energy_ts %>%
+  model(
+    ets = ETS(res_total ~ season("M"))
+  )
+
+# Forecast using the model 10 years into the future:
+energy_forecast <- energy_fit %>% 
+  forecast(h = "10 years")
+
+# Plot just the forecasted values (with 80 & 95% CIs):
+energy_forecast %>% 
+  autoplot()
+
+# Or plot it added to the original data:
+energy_forecast %>% 
+  autoplot(energy_ts)
+
+```
+
+#### Assessing residuals
+
+```{r}
+# Append the predicted values (and residuals) to original energy data
+energy_predicted <- broom::augment(energy_fit)
+
+# Use View(energy_predicted) to see the resulting data frame
+```
+
+Plotting the actual energy values (res_total), and the predicted values (stored as .fitted) atop them:
+
+```{r}
+ggplot(data = energy_predicted) +
+  geom_line(aes(x = date, y = res_total)) +
+  geom_line(aes(x = date, y = .fitted), 
+            color = "dodgerblue", 
+            alpha = 0.85)
+
+```
+
+Now let’s explore the **residuals**. Remember, some important considerations: Residuals should be uncorrelated, centered at 0, and ideally normally distributed. One way we can check the distribution is with a histogram:
+
+```{r}
+ggplot(data = energy_predicted, aes(x = .resid)) +
+  geom_histogram(fill = "dodgerblue",
+                 color = "white",
+                 bins = 20)
+```
+
+
+normally distributed, and centered at 0 (we could find summary statistics beyond this to further explore).
+
+## Other forecasting methods
+
+There are a number of other forecasting methods and models! You can learn more about ETS forecasting, seasonal naive (SNAIVE) and autoregressive integrated moving average (ARIMA) from Hyndman’s book - those are the models that I show below.
+
+```{r}
+
+# Fit 3 different forecasting models (ETS, ARIMA, SNAIVE):
+energy_fit_multi <- energy_ts %>%
+  model(
+    ets = ETS(res_total ~ season("M")),
+    arima = ARIMA(res_total),
+    snaive = SNAIVE(res_total)
+  )
+
+# Forecast 3 years into the future (from data end date)
+multi_forecast <- energy_fit_multi %>% 
+  forecast(h = "3 years")
+
+# Plot the 3 forecasts
+multi_forecast %>% 
+  autoplot(energy_ts)
+
+# Or just view the forecasts (note the similarity across models):
+multi_forecast %>% 
+  autoplot()
+
+```
+
+## Part 2: Spatial data wrangling, visualization, and a variogram
+
+#### California county outlines (polygons)
+
+#### Read in data and wrangle
+
+```{r}
+ca_counties <- read_sf(here("data","ca_counties","CA_Counties_TIGER2016.shp"))
+
+ca_subset <- ca_counties %>% 
+  select(NAME, ALAND) %>% 
+  rename(county_name = NAME, land_area = ALAND)
+```
+
+#### Check and set the CRS
+
+Use st_crs() to check the existing CRS for spatial data. We see that this CRS is WGS84 (epsg: 3857).
+
+```{r}
+ca_subset %>% st_crs()
+
+```
+
+#### Look at data
+
+Plot the California counties using geom_sf(). Notice that we can update aesthetics just like we would for a regular ggplot object. Here, we update the color based on land area (and change the color gradient).
+
+```{r}
+ggplot(data = ca_subset) +
+  geom_sf(aes(fill = land_area), color = "white", size = 0.1) +
+  theme_void() +
+  scale_fill_gradientn(colors = c("cyan","blue","purple"))
+
+```
+
+#### Invasive red sesbania records (spatial points)
+
+Red sesbania (Sesbania punicea) is an invasive plant (see more information from the California Invasive Plants Council). Observations for locations of invasive red sesbania are from CA DFW. See metadata and information here: https://map.dfg.ca.gov/metadata/ds0080.html
+
+The data exist data/red_sesbania, and the shapefile is stored as ds80.shp. Let’s read in the data:
+
+```{r}
+sesbania <- read_sf(here("data","red_sesbania","ds80.shp"))
+
+# Check the CRS:
+sesbania %>% st_crs()
+```
+
+Notice that this CRS is different from the California counties CRS, so we’ll want to update it to match. Use st_transform() to update the CRS:
+
+```{r}
+sesbania <- st_transform(sesbania, 3857) # transform sesbania to 3857 to match cali data
+
+# Then check it: 
+sesbania %>% st_crs() # its now 3857
+
+```
+
+Plotting cali and sesbania together
+
+```{r}
+ggplot() + # dont put data here to use 2 diff data sources
+  geom_sf(data = ca_subset) + 
+  geom_sf(data = sesbania, size = 1, color = "red")
+
+# took a minute to run
+```
+
+Let’s say we want to find the count of red sesbania observed locations in this dataset by county. How can I go about joining these data so that I can find counts? Don’t worry…st_join() has you covered for spatial joins!
+
+```{r}
+ca_sesbania <- ca_subset %>% 
+  st_join(sesbania)
+```
+
+And then we can find counts (note: these are not counts for individual plants, but by record in the dataset) by county:
+
+```{r}
+sesbania_counts <- ca_sesbania %>% 
+  count(county_name)
+```
+
+Then we can plot a chloropleth using the number of records for red sesbania as the fill color (instead of what we used previously, land area):
+
+```{r}
+ggplot(data = sesbania_counts) +
+  geom_sf(aes(fill = n), color = "white", size = 0.1) +
+  scale_fill_gradientn(colors = c("lightgray","orange","red")) +
+  theme_minimal() +
+  labs(fill = "Number of S. punicea records")
+```
+
+So we see that we can still use our usual wrangling skills! Let’s do a bit more for fun, just to prove that our existing wrangling skills still work with spatial data - the spatial information just sticks to it! Only plot the county with the greatest number of red sesbania records (Solano), and make a map of those locations (yeah there are many ways to do this):
+
+```{r}
+# Subset of sesbania point locations only in Solano County
+solano_sesbania <- sesbania %>% 
+  filter(COUNTY == "Solano")
+
+# Only keep Solano polygon from California County data
+solano <- ca_subset %>% 
+  filter(county_name == "Solano")
+
+ggplot() +
+  geom_sf(data = solano) +
+  geom_sf(data = solano_sesbania)
+```
+
+##  Making an interactive map with {tmap}
+
+Sometimes we’ll want to make a map interactive so that audience members can zoom in, explore different areas, etc. We can use the {tmap} package to create an interactive map. Let’s make one for our California counties (fill aesthetic by land area) with the red sesbania locations on top:
+
+```{r}
+# Set the viewing mode to "interactive":
+tmap_mode(mode = "view")
+
+# Then make a map (with the polygon fill color updated by variable 'land_area', updating the color palette to "BuGn"), then add another shape layer for the sesbania records (added as dots):
+tm_shape(ca_subset) +
+  tm_fill("land_area", palette = "BuGn") +
+  tm_shape(sesbania) +
+  tm_dots()
+```
 
 
